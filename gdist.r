@@ -1,5 +1,7 @@
 #!/usr/bin/env littler
 
+# the methods of doing this stuff I think I swiped from the program called satDNA
+
 options(warn=-1)
 
 lt <- function(mat)
@@ -29,6 +31,8 @@ Options:
 
 opt <- docopt(doc)
 
+# save(opt,file="opt.data")
+# stop()
 # opt <- list("sequence-id"="1","field-name"="2",field1="lineopunctatus",field2="quagga",alignment="trees/cirripectes_id.fasta",datafile="trees/clade.tsv")
 
 # make sure alignment and data files exist
@@ -47,13 +51,50 @@ cat1 <- opt[['field1']]
 cat2 <- opt[['field2']]
 
 cat("Loading packages (may take a minute)...\n")
-suppressMessages(library(tidyverse))
-suppressMessages(library(pegas))
+suppressPackageStartupMessages(
+  {
+    library(dplyr)
+    library(readit)
+    library(readr)
+    library(ape)
+  }
+)
 
 # load the alignment
 alignment <- read.dna(opt[['alignment']],format="fasta")
-# load the data table
-samples <- suppressMessages(read_tsv(opt[['datafile']]))
+
+
+# try to load the data table using various methods
+tryCatch(
+  {
+     samples <- suppressMessages(readit(opt[['datafile']]))
+  },
+  error = function(problem) {
+    tryCatch(
+      {
+         samples <<- suppressMessages(read_tsv(opt[['datafile']]))
+        if (ncol(samples) == 1) stop("single-column tab-sep")   
+      },
+      error = function(problem2) {
+        tryCatch(
+          {
+             samples <<- suppressMessages(read_csv(opt[['datafile']]))   
+            if (ncol(samples) == 1) stop("single-column comma-sep")
+          },
+          error = function(problem3) {
+            #final failure condition
+             samples <<- NA
+          }
+        )
+      }
+    )
+  },
+  finally = {
+    if (is.na(samples)) {
+      stop("Couldn't load data file")
+    }
+  }
+)
 
 # get column types
 col.types <- samples %>% summarize_all(class)
@@ -72,25 +113,18 @@ alignment <- alignment[labels(alignment) %in% dplyr::pull(samples,seq.id),]
 
 groupone <- samples %>% dplyr::filter(.[[field]] == cat1) %>% pull(seq.id)
 grouptwo <- samples %>% dplyr::filter(.[[field]] == cat2) %>% pull(seq.id)
-rawdist <- dist.dna(alignment,model="raw",variance=T)
 
-raw.between <- as.matrix(rawdist)[groupone,grouptwo]
-raw.within.one <- as.matrix(rawdist)[groupone,groupone]
-raw.within.two <- as.matrix(rawdist)[grouptwo,grouptwo]
+rawdist <- dist.dna(alignment,model="raw",variance=T,as.matrix=T)
+jcdist  <- dist.dna(alignment,model="JC69",variance=T,as.matrix=T)
 
-pi.k <- mean(lt(raw.within.one))
-pi.n <- mean(lt(raw.within.two))
-pi.k.jc <- mean(jc(raw.within.one,lower=T))
-pi.n.jc <- mean(jc(raw.within.two,lower=T))
+dxy <- mean(rawdist[groupone,grouptwo])
+dxy_jc <- mean(jcdist[groupone,grouptwo])
 
-dxy <- mean(raw.between)
-dxy_jc <- mean(jc(raw.between))
-
-da <- dxy - mean(pi.k,pi.n)
-da_jc <- dxy_jc - mean(pi.k.jc,pi.n.jc)
+da <- dxy - mean(mean(lt(rawdist[groupone,groupone])),mean(lt(rawdist[grouptwo,grouptwo])))
+da_jc <- dxy_jc - mean(mean(lt(jcdist[groupone,groupone])),mean(lt(jcdist[grouptwo,grouptwo])))
 
 cat("Genetic distances between",cat1,"and",cat2,"\n")
 cat("Dxy:",dxy,"\t","Dxy (JC):",dxy_jc,"\n")
-cat("Da:",da,"\t","Da (JC)",da_jc,"\n")
+cat("Da:",da,"\t","Da (JC):",da_jc,"\n")
 
 
